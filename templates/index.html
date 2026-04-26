@@ -112,6 +112,17 @@
   .freq td { padding: 3px 8px; font-size: 15px; }
   .freq .dir { font-size: 12px; max-width: 300px; }
   .freq .leave { font-size: 16px; }
+  .alerts {
+    background: #fff;
+    padding: 2px 16px;
+    font-size: 12px;
+    border-bottom: 2px solid #000;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+  }
+  .alert-item { white-space: nowrap; }
+  .alert-line { font-weight: bold; }
 </style>
 </head>
 <body>
@@ -146,6 +157,14 @@
       <span class="clock">{{ now }}</span>
     </div>
   </div>
+  {% if alerts %}
+  <div class="alerts">
+    ⚠
+    {% for a in alerts %}
+    <span class="alert-item"><span class="alert-line">{{ a.icon }} {{ a.line }}</span> {{ a.summary }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
   <table>
     <thead>
       <tr>
@@ -156,7 +175,7 @@
       </tr>
     </thead>
     <tbody>
-      {% set max_rows = 13 - frequent|length - (1 if frequent else 0) %}
+      {% set max_rows = 13 - frequent|length - (1 if frequent else 0) - (1 if alerts else 0) %}
       {% for dep in departures[:max_rows] %}
       <tr>
         <td class="line"><span class="icon">{{ dep.icon }}</span> {{ dep.line }}</td>

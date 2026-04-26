@@ -83,7 +83,7 @@ WALK_SPEED_KMH = 4.5
 LOCATION_CACHE_TTL = 120
 
 _lock = Lock()
-_cache = {"departures": [], "frequent": [], "fetched_at": None, "stale": False, "weather": None}
+_cache = {"departures": [], "frequent": [], "alerts": [], "fetched_at": None, "stale": False, "weather": None}
 _location_cache = {}
 _location_cache_lock = Lock()
 
@@ -157,22 +157,29 @@ def _fetch_for_location(location_query):
         return None
 
     all_deps = []
+    all_alerts = []
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [
             executor.submit(fetch_departures, sid, sname, walk, dur)
             for sid, sname, walk, dur in stops
         ]
         for future in futures:
-            result = future.result()
-            if result is not None:
-                all_deps.extend(result)
+            try:
+                deps, alerts = future.result()
+            except Exception:
+                continue
+            if deps is not None:
+                all_deps.extend(deps)
+            all_alerts.extend(alerts)
 
+    all_alerts = _dedupe_alerts(all_alerts)
     catchable, frequent = _process_departures(all_deps)
     weather = fetch_weather(lat, lon)
 
     data = {
         "departures": catchable,
         "frequent": frequent,
+        "alerts": all_alerts,
         "weather": weather,
         "location_name": name,
         "lat": lat,
@@ -189,15 +196,17 @@ def fetch_departures(stop_id, stop_name, walk_minutes, duration, results=20):
     try:
         resp = session.get(
             f"{VBB_BASE}/stops/{stop_id}/departures",
-            params={"duration": duration, "results": results},
+            params={"duration": duration, "results": results, "remarks": "true"},
             timeout=30,
         )
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        return None
+        return None, []
 
     departures = []
+    alerts = []
+    seen_alerts = set()
     now = datetime.now(timezone.utc)
     skip_lines = OVERLAPPING.get(stop_id, set())
     skip_products = SKIP_PRODUCTS.get(stop_id, set())
@@ -216,6 +225,18 @@ def fetch_departures(stop_id, stop_name, walk_minutes, duration, results=20):
         line_name = line.get("name", "?")
         product = line.get("productName", "")
         direction = dep.get("direction", "")
+
+        for remark in dep.get("remarks", []):
+            if remark.get("type") == "warning" and remark.get("summary"):
+                key = (line_name, remark["summary"])
+                if key not in seen_alerts:
+                    seen_alerts.add(key)
+                    alerts.append({"line": line_name, "icon": PRODUCT_ICONS.get(product, ""), "summary": remark["summary"]})
+            elif remark.get("code") == "EV":
+                key = (line_name, "EV")
+                if key not in seen_alerts:
+                    seen_alerts.add(key)
+                    alerts.append({"line": line_name, "icon": PRODUCT_ICONS.get(product, ""), "summary": "Replacement bus (Ersatzverkehr)"})
 
         if line_name in skip_lines:
             continue
@@ -245,7 +266,7 @@ def fetch_departures(stop_id, stop_name, walk_minutes, duration, results=20):
             "time": when.astimezone(BERLIN).strftime("%H:%M"),
         })
 
-    return departures
+    return departures, alerts
 
 
 def _process_departures(all_deps):
@@ -342,8 +363,21 @@ def fetch_weather(lat=LAT, lon=LON):
     }
 
 
+def _dedupe_alerts(alerts):
+    seen = set()
+    result = []
+    for a in alerts:
+        key = (a["line"], a["summary"])
+        if key not in seen:
+            seen.add(key)
+            result.append(a)
+    lines_with_warnings = {a["line"] for a in result if a["summary"] != "Replacement bus (Ersatzverkehr)"}
+    return [a for a in result if a["summary"] != "Replacement bus (Ersatzverkehr)" or a["line"] not in lines_with_warnings]
+
+
 def _do_fetch():
     all_deps = []
+    all_alerts = []
     any_success = False
 
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -352,16 +386,22 @@ def _do_fetch():
             for sid, name, walk, dur, *extra in STOPS
         ]
         for future in futures:
-            result = future.result()
-            if result is not None:
+            try:
+                deps, alerts = future.result()
+            except Exception:
+                continue
+            if deps is not None:
                 any_success = True
-                all_deps.extend(result)
+                all_deps.extend(deps)
+            all_alerts.extend(alerts)
 
     if any_success:
         catchable, frequent = _process_departures(all_deps)
+        all_alerts = _dedupe_alerts(all_alerts)
         with _lock:
             _cache["departures"] = catchable
             _cache["frequent"] = frequent
+            _cache["alerts"] = all_alerts
             _cache["fetched_at"] = datetime.now(BERLIN)
             _cache["stale"] = False
     else:
@@ -398,12 +438,14 @@ def index():
         if data:
             now = datetime.now(BERLIN).strftime("%H:%M")
             return render_template("index.html", departures=data["departures"], frequent=data["frequent"],
+                                   alerts=data.get("alerts", []),
                                    now=now, stale_minutes=None, weather=data["weather"],
                                    location_name=data["location_name"])
 
     with _lock:
         departures = list(_cache["departures"])
         frequent = list(_cache["frequent"])
+        alerts = list(_cache["alerts"])
         fetched_at = _cache["fetched_at"]
         stale = _cache["stale"]
         weather = _cache["weather"]
@@ -414,7 +456,7 @@ def index():
         stale_minutes = int(age.total_seconds() / 60)
 
     now = datetime.now(BERLIN).strftime("%H:%M")
-    return render_template("index.html", departures=departures, frequent=frequent, now=now, stale_minutes=stale_minutes, weather=weather)
+    return render_template("index.html", departures=departures, frequent=frequent, alerts=alerts, now=now, stale_minutes=stale_minutes, weather=weather)
 
 
 _fetcher = Thread(target=_background_fetcher, daemon=True)
