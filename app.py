@@ -1,12 +1,13 @@
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from threading import Thread, Lock
+from math import radians, sin, cos, sqrt, atan2
 import time
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from flask import Flask, render_template
+from flask import Flask, render_template, request
 from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
@@ -78,8 +79,110 @@ retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503,
 session.mount("https://", HTTPAdapter(max_retries=retries))
 session.headers.update({"Accept": "application/json", "User-Agent": "transpo-departure-board/1.0"})
 
+WALK_SPEED_KMH = 4.5
+LOCATION_CACHE_TTL = 120
+
 _lock = Lock()
 _cache = {"departures": [], "frequent": [], "fetched_at": None, "stale": False, "weather": None}
+_location_cache = {}
+_location_cache_lock = Lock()
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+    return 6371 * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+
+def _geocode_location(query):
+    try:
+        resp = session.get(
+            f"{VBB_BASE}/locations",
+            params={"query": query, "results": 1, "addresses": True, "poi": True, "stops": True},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        results = resp.json()
+        if results:
+            loc = results[0]
+            lat, lon = loc.get("latitude"), loc.get("longitude")
+            if lat and lon:
+                return lat, lon, loc.get("name", query)
+    except Exception:
+        pass
+    return None
+
+
+def _find_nearby_stops(lat, lon, max_results=10):
+    try:
+        resp = session.get(
+            f"{VBB_BASE}/stops/nearby",
+            params={"latitude": lat, "longitude": lon, "results": max_results},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        stops = resp.json()
+    except Exception:
+        return []
+
+    result = []
+    for stop in stops:
+        sid = stop.get("id")
+        name = stop.get("name", "?")
+        slat = stop.get("location", {}).get("latitude")
+        slon = stop.get("location", {}).get("longitude")
+        if not (sid and slat and slon):
+            continue
+        dist_km = _haversine_km(lat, lon, slat, slon)
+        walk_min = max(1, round(dist_km / WALK_SPEED_KMH * 60))
+        result.append((sid, name, walk_min, DURATION_MINUTES))
+    return result
+
+
+def _fetch_for_location(location_query):
+    now = time.monotonic()
+    with _location_cache_lock:
+        cached = _location_cache.get(location_query)
+        if cached and now - cached["time"] < LOCATION_CACHE_TTL:
+            return cached["data"]
+
+    geo = _geocode_location(location_query)
+    if not geo:
+        return None
+
+    lat, lon, name = geo
+    stops = _find_nearby_stops(lat, lon)
+    if not stops:
+        return None
+
+    all_deps = []
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(fetch_departures, sid, sname, walk, dur)
+            for sid, sname, walk, dur in stops
+        ]
+        for future in futures:
+            result = future.result()
+            if result is not None:
+                all_deps.extend(result)
+
+    catchable, frequent = _process_departures(all_deps)
+    weather = fetch_weather(lat, lon)
+
+    data = {
+        "departures": catchable,
+        "frequent": frequent,
+        "weather": weather,
+        "location_name": name,
+        "lat": lat,
+        "lon": lon,
+    }
+
+    with _location_cache_lock:
+        _location_cache[location_query] = {"data": data, "time": now}
+
+    return data
 
 
 def fetch_departures(stop_id, stop_name, walk_minutes, duration, results=20):
@@ -187,13 +290,13 @@ def _process_departures(all_deps):
     return catchable, frequent
 
 
-def fetch_weather():
+def fetch_weather(lat=LAT, lon=LON):
     try:
         resp = session.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
-                "latitude": LAT,
-                "longitude": LON,
+                "latitude": lat,
+                "longitude": lon,
                 "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
                 "hourly": "temperature_2m,weather_code,precipitation_probability",
                 "timezone": "Europe/Berlin",
@@ -288,6 +391,16 @@ def _background_fetcher():
 
 @app.route("/")
 def index():
+    location_query = request.args.get("location")
+
+    if location_query:
+        data = _fetch_for_location(location_query)
+        if data:
+            now = datetime.now(BERLIN).strftime("%H:%M")
+            return render_template("index.html", departures=data["departures"], frequent=data["frequent"],
+                                   now=now, stale_minutes=None, weather=data["weather"],
+                                   location_name=data["location_name"])
+
     with _lock:
         departures = list(_cache["departures"])
         frequent = list(_cache["frequent"])

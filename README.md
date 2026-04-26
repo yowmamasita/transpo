@@ -2,28 +2,44 @@
 
 Real-time departure board for Berlin public transit, designed for a monochrome e-ink display.
 
-![Seeed Studio reTerminal E10-1](https://files.seeedstudio.com/wiki/reTerminalE10-1/reTerminalE10-1.webp)
+![E-ink departure board](screenshot.jpeg)
 
-Runs on a [Seeed Studio reTerminal E10-1](https://www.seeedstudio.com/reTerminal-E1001-p-6534.html) (7.5" 800×480 e-ink), refreshing every 5 minutes.
+Runs on a [Seeed Studio reTerminal E10-1](https://www.seeedstudio.com/reTerminal-E1001-p-6534.html) (7.5" 800x480 e-ink), refreshing every 5 minutes.
 
 ## Features
 
 - **Departure times** — shows next catchable trips from nearby stops with "leave by" times so you know when to walk out the door
 - **Frequent lines** — trams and buses that run every few minutes are grouped separately ("every Xm") instead of cluttering the board
 - **Weather** — current conditions + 12-hour forecast (every 2 hours) in the header
+- **Configurable location** — pass `?location=...` to show departures from any Berlin address
 - **Resilient** — background fetching every 2 minutes with caching; if the VBB API goes down, shows last known data with a staleness warning
 - **Monochrome optimized** — black and white layout, no images, designed for e-ink contrast
 
+## Usage
+
+```
+/?location=Alexanderplatz
+/?location=Friedrichstraße 100, Berlin
+/?location=S+U Rathaus Steglitz
+```
+
+Pass any Berlin address, place name, or stop name as the `location` query parameter. The app geocodes it via the VBB API, finds the nearest stops, and estimates walk times based on distance.
+
+Without the parameter, the board uses a default set of hardcoded stops.
+
 ## How it works
 
-A Flask app fetches real-time departures from the [VBB transport API](https://v6.vbb.transport.rest) and weather from [Open-Meteo](https://open-meteo.com/). Data is fetched in background threads and cached, so page loads are instant (~30ms).
+A Flask app fetches real-time departures from the [VBB transport API](https://v6.vbb.transport.rest) and weather from [Open-Meteo](https://open-meteo.com/).
+
+- **Default mode** (no `?location=`) — data is fetched in background threads and cached, so page loads are instant (~30ms)
+- **Custom location** — departures are fetched on-demand and cached for 2 minutes
 
 The board is split into two sections:
 
 1. **Individual departures** — trips you need to plan for, sorted by when you need to leave home
 2. **Frequent lines** — services running every ≤12 minutes per direction, shown as "every Xm"
 
-Walk times to each stop are configured, and the "leave by" time accounts for both the walk and any delays.
+Walk times to each stop are configured (default) or estimated from distance at 4.5 km/h (custom location). The "leave by" time accounts for both the walk and any delays.
 
 ## Configuration
 

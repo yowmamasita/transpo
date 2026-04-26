@@ -117,7 +117,7 @@
 <body>
   <div class="header">
     <div class="header-left">
-      <span class="header-title">DEPARTURES
+      <span class="header-title">DEPARTURES{% if location_name is defined and location_name %} — {{ location_name }}{% endif %}
         {% if stale_minutes is not none %}
           <span class="stale">⚠ {{ stale_minutes }}m old</span>
         {% endif %}
