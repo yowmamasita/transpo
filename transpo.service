@@ -1,0 +1,14 @@
+[Unit]
+Description=Transpo Departure Board
+After=network.target
+
+[Service]
+Type=simple
+User=ben
+WorkingDirectory=/home/ben/projects/transpo
+ExecStart=/usr/bin/python3 /home/ben/projects/transpo/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

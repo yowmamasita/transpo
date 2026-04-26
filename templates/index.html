@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=800, height=480, initial-scale=1.0">
+<title>Departures</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 800px;
+    height: 480px;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+    background: #fff;
+    color: #000;
+  }
+  .header {
+    background: #000;
+    color: #fff;
+    padding: 5px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 18px;
+    font-weight: bold;
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .header-title { font-size: 22px; }
+  .stale { font-size: 12px; font-weight: normal; }
+  .header-weather {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 14px;
+    font-weight: normal;
+  }
+  .header-weather .wicon { font-size: 18px; }
+  .header-weather .wdetail { font-size: 11px; opacity: 0.8; }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .forecast {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: normal;
+  }
+  .forecast .hour { text-align: center; }
+  .forecast .hicon { font-size: 13px; }
+  .forecast .rain { font-size: 9px; opacity: 0.8; }
+  .clock { font-size: 22px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th {
+    background: #000;
+    color: #fff;
+    text-align: left;
+    padding: 3px 8px;
+    font-size: 12px;
+    font-weight: bold;
+  }
+  th.r { text-align: right; padding-right: 12px; }
+  tr { border-bottom: 1px solid #000; }
+  td {
+    padding: 3px 8px;
+    font-size: 17px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .icon { font-size: 15px; }
+  .line {
+    font-weight: bold;
+    font-size: 19px;
+    width: 100px;
+  }
+  .dir {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .stop {
+    font-size: 12px;
+    max-width: 170px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .walk { font-size: 10px; }
+  .leave {
+    text-align: right;
+    font-weight: bold;
+    font-size: 20px;
+    padding-right: 12px;
+    width: 110px;
+  }
+  .delay { font-size: 10px; font-weight: bold; }
+  .sep td {
+    background: #000;
+    color: #fff;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: bold;
+  }
+  .freq td { padding: 3px 8px; font-size: 15px; }
+  .freq .dir { font-size: 12px; max-width: 300px; }
+  .freq .leave { font-size: 16px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <span class="header-title">DEPARTURES
+        {% if stale_minutes is not none %}
+          <span class="stale">⚠ {{ stale_minutes }}m old</span>
+        {% endif %}
+      </span>
+      {% if weather %}
+      <div class="header-weather">
+        <span class="wicon">{{ weather.icon }}</span>
+        <span>{{ weather.temp }}°</span>
+        <span class="wdetail">feels {{ weather.feels }}° · {{ weather.desc }} · {{ weather.wind }}km/h</span>
+      </div>
+      {% endif %}
+    </div>
+    <div class="header-right">
+      {% if weather %}
+      <div class="forecast">
+        {% for h in weather.hours %}
+        <div class="hour">
+          <div>{{ h.time }}</div>
+          <div class="hicon">{{ h.icon }}</div>
+          <div>{{ h.temp }}°</div>
+          {% if h.rain > 0 %}<div class="rain">💧{{ h.rain }}%</div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <span class="clock">{{ now }}</span>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Line</th>
+        <th>Direction</th>
+        <th>Stop</th>
+        <th class="r">Leave by</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set max_rows = 13 - frequent|length - (1 if frequent else 0) %}
+      {% for dep in departures[:max_rows] %}
+      <tr>
+        <td class="line"><span class="icon">{{ dep.icon }}</span> {{ dep.line }}</td>
+        <td class="dir">
+          {{ dep.direction }}
+          {% if dep.delay > 0 %}<span class="delay"> (+{{ dep.delay }})</span>{% endif %}
+        </td>
+        <td class="stop">{{ dep.stop }} <span class="walk">{{ dep.walk }}'</span></td>
+        <td class="leave">{{ dep.leave_at }}</td>
+      </tr>
+      {% endfor %}
+      {% if frequent %}
+      <tr class="sep"><td colspan="4">FREQUENT — just walk, next one is coming</td></tr>
+      {% for f in frequent %}
+      <tr class="freq">
+        <td class="line"><span class="icon">{{ f.icon }}</span> {{ f.line }}</td>
+        <td class="dir">{{ f.directions | join(' · ') }}</td>
+        <td class="stop">{{ f.stop }} <span class="walk">{{ f.walk }}'</span></td>
+        <td class="leave">every {{ f.every_min }}m</td>
+      </tr>
+      {% endfor %}
+      {% endif %}
+    </tbody>
+  </table>
+</body>
+</html>
